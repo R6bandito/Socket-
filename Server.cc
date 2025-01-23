@@ -73,18 +73,17 @@ void AcceptConnection(SOCKET& socketed) {
   ClientAddr.sin_family = AF_INET;
   int ClientAddr_len = sizeof(ClientAddr);
   std::cout << "Waiting for Connection..." << std::endl;
-  socketed = accept(socketed,(struct sockaddr*) &ClientAddr, &ClientAddr_len);
+  SOCKET new_socket = accept(socketed,(struct sockaddr*) &ClientAddr, &ClientAddr_len);
   if (socketed == INVALID_SOCKET) {
     std::cerr << "Socket Accept Failed with : " << WSAGetLastError() << std::endl;
-    WSACleanup();
-    exit(EXIT_FAILURE);
+    return;
   }
 
 // 使用互斥锁保护 Connection_Container操作，将新连接的套接字加入到容器中
   {
     std::lock_guard<std::mutex> lock(Connection_Mutex);
-    Connection_Container.push_back(socketed);
-    std::thread(ReceiveData,std::ref(socketed)).detach();
+    Connection_Container.push_back(new_socket);
+    std::thread(ReceiveData,std::ref(new_socket)).detach();
   }
   std::cout << "Connection Accepted!" << std::endl;
 }
@@ -138,6 +137,10 @@ void CleanUp() {
 }
 
 int main(int argc,const char *argv[]) {
+  if (argc != 3) {
+    std::cerr << "Usage: " << argv[0] << " <IP> <PORT>" << std::endl;
+    return EXIT_FAILURE;
+  }
   const char* _IP = argv[1];
   const uint16_t _PORT = std::stoi(argv[2]);
   
