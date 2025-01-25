@@ -10,6 +10,7 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <vector>
+#include <string>
 
 void Initialize_Winsock() {
   WSADATA wsadata;
@@ -55,17 +56,14 @@ bool setNoBlocking(SOCKET& sockfd) {
     std::cerr << "non-Blocking The I/O Failed with: " << WSAGetLastError() << std::endl;
     return false;
   }
-  std::cout << "Success non-Blocking The I/O" << std::endl;
   return true;
 }
 
 // Select I/O多路复用
-void Select_IO_Accept(SOCKET& sockfd, std::vector<SOCKET>& clients) {
+fd_set Select_IO_Accept(SOCKET& sockfd, std::vector<SOCKET>& clients) {
   SOCKET newfd;
   fd_set readfds;  // 读写文件描述符集合  
   FD_ZERO(&readfds);  // 清空文件描述符集合
-  struct sockaddr_in addr;
-  int addrlen = sizeof(addr);
 
   FD_SET(sockfd, &readfds);  // 将服务端监听套接字加入文件描述符集合
   SOCKET maxfd = sockfd;  // 最大文件描述符
@@ -81,47 +79,69 @@ void Select_IO_Accept(SOCKET& sockfd, std::vector<SOCKET>& clients) {
   int activity = select(maxfd + 1, &readfds, nullptr, nullptr, nullptr);  // 阻塞等待文件描述符集合中的套接字有数据可读
   if (activity == SOCKET_ERROR) {
     std::cerr << "Select Failed with: " << WSAGetLastError() << std::endl;
-    return;
+    return readfds;
   }
 
   if (FD_ISSET(sockfd, &readfds)) {
     newfd = accept(sockfd, nullptr, nullptr); // 接受客户端连接(不需要客户端地址信息)
     if (newfd == INVALID_SOCKET) {
       std::cerr << "Accept Failed with: " << WSAGetLastError() << std::endl;
-      return;
+      return readfds;
     }
     std::cout << "New Coennection: " << newfd << std::endl;
     if (!setNoBlocking(newfd))  // 设置新的客户端I/O为非阻塞
-      return;
+      return readfds;
   }
   for(auto &it : clients) {  // 将新的客户端套接字加入客户端套接字数组
     if(it == 0) {
       it = newfd;
+      break;
     }
   }
-  return;
+  return readfds;
 }
 
 // 处理客户端
-void Handle_Client(std::vector<SOCKET>& clients) {
-
+void Handle_Client(std::vector<SOCKET>& clients , fd_set& readfds) {
+  char buffer[4096] = {0};
+  for(auto &it : clients) {
+    if (it > 0 && FD_ISSET(it , &readfds)) {
+      int value = recv(it , buffer , sizeof(buffer)-1 , 0);
+      if (value == 0) {
+        std::cout << "Client Disconnected , sockfd: " << it << std::endl;
+        closesocket(it);
+        it = 0;
+      }
+      else if (value < 0) {
+        int error = WSAGetLastError();
+        if (error != WSAEWOULDBLOCK) {  // 处理非阻塞模式下的错误
+          std::cerr << "Recv failed with error: " << error << std::endl;
+          closesocket(it);
+          it = 0;
+        }
+      }
+      else {
+        buffer[value] = '\0';
+        std::cout << "Received Message: " << buffer << std::endl;
+      }
+    }
+  }
 }
 
 int main(int argc, const char* argv[]) {
   const int MAX_CLIENTS = 64;
   const char* _IP = argv[1];
   const int _PORT = std::atoi(argv[2]);
-  std::vector<SOCKET> clients;  clients.reserve(MAX_CLIENTS);  // 客户端套接字数组
-  for(auto &it : clients) {   //初始化文件描述符集合
-    it = 0;
-  }
+  std::vector<SOCKET> clients(MAX_CLIENTS,0);  // 客户端套接字数组
+  fd_set readfds;
 
-  Initialize_Winsock();
+  Initialize_Winsock();  
   SOCKET sockfd = Create_Socket();
   setNoBlocking(sockfd);
   Bind_Listen_Socket(sockfd, _IP, _PORT, MAX_CLIENTS);
   while(true) {
-    Select_IO_Accept(sockfd, clients);
+    readfds = Select_IO_Accept(sockfd, clients);
+    Handle_Client(clients , readfds);
   }
   return 0;
 }
